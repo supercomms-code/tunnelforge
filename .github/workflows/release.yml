@@ -5,21 +5,56 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.determine_tag.outputs.tag_name }}
+    steps:
+      - name: Determine tag
+        id: determine_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag_name=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.determine_tag.outputs.tag_name }}
+          name: "TunnelForge ${{ steps.determine_tag.outputs.tag_name }}"
+          body: "See the assets below to download TunnelForge for your platform."
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
             args: "--target aarch64-apple-darwin"
+            rust_targets: "aarch64-apple-darwin"
           - platform: macos-latest
             args: "--target x86_64-apple-darwin"
+            rust_targets: "x86_64-apple-darwin"
           - platform: ubuntu-22.04
             args: ""
+            rust_targets: ""
           - platform: windows-latest
             args: ""
+            rust_targets: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -33,7 +68,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -41,13 +81,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
 
-      - name: Install icon tools (Windows)
+      - name: Generate Windows icon
         if: matrix.platform == 'windows-latest'
         run: |
           pip install Pillow
           python -c "from PIL import Image; img = Image.open('src-tauri/icons/icon.png'); img.save('src-tauri/icons/icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 
-      - name: Install icon tools (macOS)
+      - name: Generate macOS icon
         if: matrix.platform == 'macos-latest'
         run: |
           pip install Pillow
@@ -61,9 +101,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "TunnelForge ${{ github.ref_name }}"
+          tagName: ${{ needs.create-release.outputs.tag_name }}
+          releaseName: "TunnelForge ${{ needs.create-release.outputs.tag_name }}"
           releaseBody: "See the assets below to download TunnelForge for your platform."
-          releaseDraft: true
-          prerelease: false
+          releaseDraft: false
+          prerelease: true
           args: ${{ matrix.args }}
