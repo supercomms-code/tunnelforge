@@ -282,6 +282,36 @@ body {
   color: var(--text-muted);
 }
 
+.quick-tunnel-result {
+  margin-top: 16px;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.quick-tunnel-result label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.quick-tunnel-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.quick-tunnel-url-row code {
+  flex: 1;
+  background: var(--bg-hover);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
 /* Badge */
 .badge {
   font-size: 11px;

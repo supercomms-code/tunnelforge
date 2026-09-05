@@ -40,7 +40,7 @@ fn main() {
 
             // Set up tray
             let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap())
+                .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("TunnelForge — Tunnel Manager")
                 .on_menu_event(|app, event| {

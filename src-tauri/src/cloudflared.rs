@@ -9,11 +9,28 @@ use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use sysinfo::{System, Pid};
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Build a Command for launching cloudflared without popping up a visible console window on Windows.
+pub fn cloudflared_command(binary: &PathBuf) -> Command {
+    let cmd = Command::new(binary);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = cmd;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
+    }
+    #[cfg(not(target_os = "windows"))]
+    cmd
+}
+
 pub struct CloudflaredManager {
     /// Active cloudflared child processes keyed by tunnel name
-    processes: Mutex<HashMap<String, Child>>,
+    pub processes: Mutex<HashMap<String, Child>>,
     /// Current status of each tunnel
-    statuses: Mutex<HashMap<String, TunnelStatus>>,
+    pub statuses: Mutex<HashMap<String, TunnelStatus>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,7 +199,7 @@ impl CloudflaredManager {
 
         log::info!("Starting tunnel '{}' with config {:?}", tunnel_name, config_path);
 
-        let child = Command::new(&binary)
+        let child = cloudflared_command(&binary)
             .args(&["tunnel", "--config", config_path.to_str().unwrap(), "run"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -224,7 +241,7 @@ impl CloudflaredManager {
 
         log::info!("Starting tunnel '{}' with token", tunnel_name);
 
-        let child = Command::new(&binary)
+        let child = cloudflared_command(&binary)
             .args(&["tunnel", "run", "--token", token])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -326,7 +343,7 @@ impl CloudflaredManager {
 
         for (name, child) in procs.iter_mut() {
             let pid = child.id();
-            sys.refresh_processes();
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
 
             // Check if process is still running
             match child.try_wait() {

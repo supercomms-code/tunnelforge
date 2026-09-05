@@ -1,11 +1,12 @@
 // commands.rs — Tauri IPC commands (the bridge between Rust backend and React frontend)
 
-use crate::cloudflared::{CloudflaredManager, TunnelStatus};
+use crate::cloudflared::{CloudflaredManager, TunnelStatus, cloudflared_command};
 use crate::config::{
     AppConfig, TunnelDefinition, ServiceMapping, load_config, save_config,
     save_tunnel_config, generate_quick_tunnel_args,
 };
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_shell::ShellExt;
 use uuid::Uuid;
 
 /// Check if cloudflared binary is installed
@@ -206,6 +207,7 @@ pub fn get_all_tunnel_statuses(
 /// Start a quick tunnel (no Cloudflare account needed — uses trycloudflare.com)
 #[tauri::command]
 pub fn start_quick_tunnel(
+    app: AppHandle,
     manager: State<'_, CloudflaredManager>,
     local_port: u16,
     protocol: String,
@@ -214,8 +216,8 @@ pub fn start_quick_tunnel(
         .ok_or("cloudflared not installed")?;
 
     let args = generate_quick_tunnel_args(local_port, &protocol);
-    
-    let child = std::process::Command::new(&binary)
+
+    let mut child = cloudflared_command(&binary)
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -223,21 +225,57 @@ pub fn start_quick_tunnel(
         .map_err(|e| format!("Failed to start quick tunnel: {}", e))?;
 
     let pid = child.id();
-    let mut procs = manager.processes.lock().unwrap();
-    procs.insert("quick-tunnel".to_string(), child);
+    // Take stderr now, before the child is moved into storage — cloudflared prints
+    // the public trycloudflare.com URL to stderr shortly after starting.
+    let stderr = child.stderr.take();
 
-    let mut statuses = manager.statuses.lock().unwrap();
-    statuses.insert("quick-tunnel".to_string(), TunnelStatus {
-        name: "quick-tunnel".to_string(),
-        running: true,
-        pid: Some(pid),
-        started_at: Some(chrono::Utc::now()),
-        public_url: None, // Will be parsed from output — URL appears in cloudflared logs
-        services: vec![],
-        error: None,
-        bytes_in: 0,
-        bytes_out: 0,
-    });
+    {
+        let mut procs = manager.processes.lock().unwrap();
+        procs.insert("quick-tunnel".to_string(), child);
+    }
+
+    {
+        let mut statuses = manager.statuses.lock().unwrap();
+        statuses.insert("quick-tunnel".to_string(), TunnelStatus {
+            name: "quick-tunnel".to_string(),
+            running: true,
+            pid: Some(pid),
+            started_at: Some(chrono::Utc::now()),
+            public_url: None,
+            services: vec![],
+            error: None,
+            bytes_in: 0,
+            bytes_out: 0,
+        });
+    }
+
+    // Watch cloudflared's output on a background thread. As soon as it prints the
+    // public trycloudflare.com URL, store it so the UI's polling picks it up.
+    if let Some(stderr) = stderr {
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                if let Some(start) = line.find("https://") {
+                    if line[start..].contains(".trycloudflare.com") {
+                        let end = line[start..]
+                            .find(|c: char| c.is_whitespace() || c == '|')
+                            .map(|i| start + i)
+                            .unwrap_or(line.len());
+                        let url = line[start..end].trim().to_string();
+
+                        let manager = app_handle.state::<CloudflaredManager>();
+                        let mut statuses = manager.statuses.lock().unwrap();
+                        if let Some(status) = statuses.get_mut("quick-tunnel") {
+                            status.public_url = Some(url);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
 
     Ok(())
 }
@@ -258,8 +296,8 @@ pub fn get_app_version() -> String {
 
 /// Open a URL in the default browser
 #[tauri::command]
-pub async fn open_url(url: String) -> Result<(), String> {
-    tauri_plugin_shell::ShellExt::shell()
+pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.shell()
         .open(url, None)
         .map_err(|e| format!("Failed to open URL: {}", e))
 }
